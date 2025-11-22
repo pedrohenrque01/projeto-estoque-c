@@ -1,21 +1,8 @@
-/*
-  Gerenciador de Estoque Simplificado (C puro)
-  Requisitos:
-  - struct Produto { nome, codigo, preco }
-  - abrir/criar arquivo binário em main()
-  - tamanho(): usa fseek(SEEK_END) e sizeof(struct)
-  - cadastrar(): lê dados do usuário, fseek(SEEK_END) + fwrite()
-  - consultar(): solicita índice (posição) e exibe registro com fseek(SEEK_SET) + fread()
-  - modularização: protótipos e funções fora da main()
-  - limpaBuffer() padronizada
-  - leitura de strings segura com fgets() e remoção de '\n' via strcspn()
-*/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* ----------- Tipos e constantes ----------- */
+/* ------------------- Tipos e constantes ------------------- */
 typedef struct {
     char nome[50];
     int codigo;
@@ -23,15 +10,23 @@ typedef struct {
 } Produto;
 
 const char *NOME_ARQUIVO = "estoque.dat";
+const char *NOME_TEMP    = "estoque.tmp";
+const char *NOME_REL     = "relatorio.txt";
 
-/* ----------- Protótipos (modularização) ----------- */
+/* ------------------- Protótipos ------------------- */
+/* limpeza e leitura */
 void limpaBuffer(void);
 void ler_string(const char *prompt, char *buffer, size_t tamanho);
-long tamanho(FILE *fp); /* retorna número de registros no arquivo */
-void cadastrar(FILE *fp);
-void consultar(FILE *fp);
 
-/* ----------- Implementações ----------- */
+/* operações de arquivo */
+long tamanho(FILE *fp);            /* retorna número de registros no arquivo */
+void cadastrar(FILE *fp);          /* adiciona um registro ao final */
+void consultar(FILE *fp);          /* consulta um registro por índice */
+void listar_todos(FILE *fp);       /* lista todos na tela */
+void excluir(FILE **pfp);          /* exclui um registro (recebe &fp para atualizar) */
+void gerar_relatorio(FILE *fp);    /* cria relatorio.txt com todos os registros */
+
+/* ------------------- Implementações ------------------- */
 
 /* Limpa buffer de stdin até '\n' ou EOF */
 void limpaBuffer(void) {
@@ -39,67 +34,66 @@ void limpaBuffer(void) {
     while ((c = getchar()) != '\n' && c != EOF) { }
 }
 
-/* Lê string com fgets e remove o '\n' (usa strcspn) */
-/* Se a string preenchida não contiver '\n', limpa o restante do buffer */
+/* Lê string de forma segura com fgets e remove '\n' usando strcspn */
 void ler_string(const char *prompt, char *buffer, size_t tamanho) {
     printf("%s", prompt);
     if (fgets(buffer, (int)tamanho, stdin) == NULL) {
-        /* Em caso de erro, coloca string vazia */
         buffer[0] = '\0';
         return;
     }
-    /* Remove newline se presente */
+    /* remove o newline caso exista */
     buffer[strcspn(buffer, "\n")] = '\0';
 
-    /* Se o último caractere lido não foi '\n' e não atingimos EOF,
-       é porque sobrou dados no stdin -> limpamos */
-    if (strchr(buffer, '\n') == NULL && strlen(buffer) == tamanho - 1) {
-        /* Ainda pode haver caracteres restantes na entrada */
+    /* se o usuário digitou mais que o buffer, limpa o resto */
+    if (strlen(buffer) == tamanho - 1) {
         int c;
         if ((c = getchar()) != '\n' && c != EOF) {
-            /* existe resto -> limpar todo o resto */
             while ((c = getchar()) != '\n' && c != EOF) { }
         }
     }
 }
 
-/* Retorna número total de registros no arquivo */
+/* Retorna o número total de registros no arquivo (0 se fp==NULL) */
 long tamanho(FILE *fp) {
+    long bytes;
     if (fp == NULL) return 0;
     if (fseek(fp, 0, SEEK_END) != 0) {
         perror("fseek (SEEK_END) falhou em tamanho()");
         return 0;
     }
-    long bytes = ftell(fp);
+    bytes = ftell(fp);
     if (bytes < 0) {
         perror("ftell falhou em tamanho()");
         return 0;
     }
+    /* divide pelo tamanho da struct para obter número de registros */
     return bytes / (long)sizeof(Produto);
 }
 
 /* Cadastra novo produto e grava no final do arquivo */
 void cadastrar(FILE *fp) {
+    Produto p;
+    size_t escritos;
+
     if (fp == NULL) {
         printf("Arquivo nao esta aberto para cadastrar.\n");
         return;
     }
 
-    Produto p;
-    /* Ler campos */
+    /* leitura dos campos */
     ler_string("Nome do produto: ", p.nome, sizeof(p.nome));
 
     printf("Codigo (inteiro): ");
     if (scanf("%d", &p.codigo) != 1) {
-        printf("Entrada invalida para código.\n");
+        printf("Entrada invalida para codigo.\n");
         limpaBuffer();
         return;
     }
-    limpaBuffer(); /* remove '\n' após scanf */
+    limpaBuffer();
 
     printf("Preco (ex: 19.90): ");
     if (scanf("%f", &p.preco) != 1) {
-        printf("Entrada inválida para preço.\n");
+        printf("Entrada invalida para preco.\n");
         limpaBuffer();
         return;
     }
@@ -111,35 +105,36 @@ void cadastrar(FILE *fp) {
         return;
     }
 
-    size_t escritos = fwrite(&p, sizeof(Produto), 1, fp);
+    escritos = fwrite(&p, sizeof(Produto), 1, fp);
     if (escritos != 1) {
         perror("fwrite falhou em cadastrar()");
         return;
     }
 
-    /* garantir que os dados vão para o disco */
-    fflush(fp);
-
+    fflush(fp); /* garante escrita em disco */
     printf("Produto cadastrado com sucesso!\n");
 }
 
 /* Consulta um registro por índice (posição) */
 void consultar(FILE *fp) {
+    long total;
+    long idx;
+    Produto p;
+
     if (fp == NULL) {
         printf("Arquivo nao esta aberto para consulta.\n");
         return;
     }
 
-    long total = tamanho(fp);
+    total = tamanho(fp);
     if (total == 0) {
         printf("Arquivo vazio. Nenhum registro para consultar.\n");
         return;
     }
 
     printf("Há %ld registros. Informe o indice (0 .. %ld): ", total, total - 1);
-    long idx;
     if (scanf("%ld", &idx) != 1) {
-        printf("Indice invalido.\n");
+        printf("Indice inválido.\n");
         limpaBuffer();
         return;
     }
@@ -150,16 +145,12 @@ void consultar(FILE *fp) {
         return;
     }
 
-    /* posiciona no registro desejado */
-    long desloc = idx * (long)sizeof(Produto);
-    if (fseek(fp, desloc, SEEK_SET) != 0) {
+    /* posiciona no registro desejado e lê */
+    if (fseek(fp, idx * (long)sizeof(Produto), SEEK_SET) != 0) {
         perror("fseek (SEEK_SET) falhou em consultar()");
         return;
     }
-
-    Produto p;
-    size_t lidos = fread(&p, sizeof(Produto), 1, fp);
-    if (lidos != 1) {
+    if (fread(&p, sizeof(Produto), 1, fp) != 1) {
         perror("fread falhou em consultar()");
         return;
     }
@@ -171,28 +162,214 @@ void consultar(FILE *fp) {
     printf("-------------------\n");
 }
 
-/* ----------- main: abre/cria arquivo binário e menu ----------- */
-int main(void) {
-    FILE *fp = fopen(NOME_ARQUIVO, "r+b"); /* tenta abrir para leitura/escrita binária */
+/* Lista todos os registros na tela (útil para verificação) */
+void listar_todos(FILE *fp) {
+    long tot;
+    long i;
+    Produto p;
+
     if (fp == NULL) {
-        /* se não existe, cria com w+b e reabre com r+b */
+        printf("Arquivo nao esta aberto.\n");
+        return;
+    }
+
+    tot = tamanho(fp);
+    if (tot == 0) {
+        printf("Arquivo vazio.\n");
+        return;
+    }
+
+    printf("\n=== Listagem de todos os registros (%ld) ===\n", tot);
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        perror("fseek falhou na listagem");
+        return;
+    }
+
+    for (i = 0; i < tot; i++) {
+        if (fread(&p, sizeof(Produto), 1, fp) != 1) {
+            perror("fread falhou na listagem");
+            return;
+        }
+        printf("[%ld] Nome: %s | Codigo: %d | Preco: %.2f\n", i, p.nome, p.codigo, p.preco);
+    }
+    printf("=========================================\n");
+}
+
+void excluir(FILE **pfp) {
+    FILE *fp;
+    FILE *ft;
+    long tot;
+    long idx;
+    long i;
+    Produto p;
+    int conseguiu;
+
+    if (pfp == NULL) return;
+    fp = *pfp;
+    if (fp == NULL) {
+        printf("Arquivo nao esta aberto.\n");
+        return;
+    }
+
+    tot = tamanho(fp);
+    if (tot == 0) {
+        printf("Arquivo vazio. Nada para excluir.\n");
+        return;
+    }
+
+    printf("Ha %ld registros. Informe o indice para excluir (0 .. %ld): ", tot, tot - 1);
+    if (scanf("%ld", &idx) != 1) {
+        printf("Entrada invalida.\n");
+        limpaBuffer();
+        return;
+    }
+    limpaBuffer();
+
+    if (idx < 0 || idx >= tot) {
+        printf("Indice fora da faixa.\n");
+        return;
+    }
+
+    /* abre arquivo temporário para escrita */
+    ft = fopen(NOME_TEMP, "w+b");
+    if (ft == NULL) {
+        perror("Nao foi possivel criar arquivo temporario");
+        return;
+    }
+
+    /* copia todos os registros exceto o índice escolhido */
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        perror("fseek falhou no arquivo original");
+        fclose(ft);
+        remove(NOME_TEMP);
+        return;
+    }
+
+    conseguiu = 1;
+    for (i = 0; i < tot; i++) {
+        if (fread(&p, sizeof(Produto), 1, fp) != 1) {
+            perror("fread falhou durante exclusao");
+            conseguiu = 0;
+            break;
+        }
+        if (i == idx) continue; /* pula o registro a excluir */
+        if (fwrite(&p, sizeof(Produto), 1, ft) != 1) {
+            perror("fwrite falhou no arquivo temporario");
+            conseguiu = 0;
+            break;
+        }
+    }
+
+    fflush(ft);
+    fclose(ft);
+
+    if (!conseguiu) {
+        /* tentativa de limpeza */
+        remove(NOME_TEMP);
+        printf("Falha ao excluir registro.\n");
+        return;
+    }
+
+    /* fecha o arquivo original antes de substituir */
+    fclose(fp);
+
+    /* substitui arquivo original pelo temporário */
+    if (remove(NOME_ARQUIVO) != 0) {
+        perror("Falha ao remover arquivo original");
+        /* tenta manter consistência: tenta reabrir o original */
+        *pfp = fopen(NOME_ARQUIVO, "r+b");
+        return;
+    }
+    if (rename(NOME_TEMP, NOME_ARQUIVO) != 0) {
+        perror("Falha ao renomear arquivo temporario");
+        /* tenta reabrir (pode não existir) */
+        *pfp = fopen(NOME_ARQUIVO, "r+b");
+        return;
+    }
+
+    /* reabre o arquivo principal em r+b e atualiza ponteiro na main */
+    *pfp = fopen(NOME_ARQUIVO, "r+b");
+    if (*pfp == NULL) {
+        perror("Falha ao reabrir arquivo apos exclusao");
+        return;
+    }
+
+    printf("Registro %ld excluido com sucesso!\n", idx);
+}
+
+/* Gera arquivo de relatório (texto) com todos os registros */
+void gerar_relatorio(FILE *fp) {
+    long tot;
+    long i;
+    Produto p;
+    FILE *fr;
+
+    if (fp == NULL) {
+        printf("Arquivo nao esta aberto.\n");
+        return;
+    }
+
+    tot = tamanho(fp);
+    if (tot == 0) {
+        printf("Arquivo vazio. Nenhum dado para relatorio.\n");
+        return;
+    }
+
+    fr = fopen(NOME_REL, "w");
+    if (fr == NULL) {
+        perror("No foi possivel criar relatorio");
+        return;
+    }
+
+    fprintf(fr, "===== RELATORIO DE PRODUTOS (%ld registros) =====\n\n", tot);
+
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        perror("fseek falhou na geracao de relatorio");
+        fclose(fr);
+        return;
+    }
+
+    for (i = 0; i < tot; i++) {
+        if (fread(&p, sizeof(Produto), 1, fp) != 1) {
+            perror("fread falhou na geracao de relatorio");
+            break;
+        }
+        fprintf(fr, "[%ld] Nome: %s\n", i, p.nome);
+        fprintf(fr, "     Codigo: %d\n", p.codigo);
+        fprintf(fr, "     Preco : %.2f\n\n", p.preco);
+    }
+
+    fclose(fr);
+    printf("Relatrio gerado com sucesso em '%s'!\n", NOME_REL);
+}
+
+/* ------------------- main: abre/cria arquivo binário e menu ------------------- */
+int main(void) {
+    FILE *fp;
+    int opcao;
+
+    /* tenta abrir arquivo existente; se não existir, cria */
+    fp = fopen(NOME_ARQUIVO, "r+b");
+    if (fp == NULL) {
         fp = fopen(NOME_ARQUIVO, "w+b");
         if (fp == NULL) {
             perror("Nao foi possivel criar o arquivo");
             return EXIT_FAILURE;
         }
-        /* já aberto em w+b, podemos continuar */
     }
 
-    int opcao = -1;
+    opcao = -1;
     while (opcao != 0) {
         printf("\n=== Gerenciador de Estoque ===\n");
         printf("1 - Cadastrar produto\n");
         printf("2 - Consultar por indice\n");
         printf("3 - Mostrar numero de registros\n");
         printf("4 - Listar todos (opcional)\n");
+        printf("5 - Excluir por indice\n");
+        printf("6 - Gerar relatorio\n");
         printf("0 - Sair\n");
         printf("Escolha: ");
+
         if (scanf("%d", &opcao) != 1) {
             printf("Entrada invalida.\n");
             limpaBuffer();
@@ -208,34 +385,20 @@ int main(void) {
                 consultar(fp);
                 break;
             case 3: {
-                long tot = tamanho(fp);
+                long tot;
+                tot = tamanho(fp);
                 printf("Total de registros no arquivo: %ld\n", tot);
                 break;
             }
-            case 4: {
-    long tot = tamanho(fp);
-    if (tot == 0) {
-        printf("Arquivo vazio.\n");
-    } else {
-        long i;  // <<--- declare AQUI
-        printf("\n=== Listagem de todos os registros (%ld) ===\n", tot);
-        for (i = 0; i < tot; i++) {
-            if (fseek(fp, i * (long)sizeof(Produto), SEEK_SET) != 0) {
-                perror("fseek falhou na listagem");
+            case 4:
+                listar_todos(fp);
                 break;
-            }
-            Produto p;
-            if (fread(&p, sizeof(Produto), 1, fp) != 1) {
-                perror("fread falhou na listagem");
+            case 5:
+                excluir(&fp); /* passa &fp para que a função atualize o ponteiro */
                 break;
-            }
-            printf("[%ld] Nome: %s | Codigo: %d | Preco: %.2f\n",
-                   i, p.nome, p.codigo, p.preco);
-        }
-        printf("=========================================\n");
-    }
-    break;
-}
+            case 6:
+                gerar_relatorio(fp);
+                break;
             case 0:
                 printf("Saindo...\n");
                 break;
@@ -245,7 +408,7 @@ int main(void) {
         }
     }
 
-    fclose(fp);
+    if (fp != NULL) fclose(fp);
     return 0;
 }
 

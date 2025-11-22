@@ -1,0 +1,6 @@
+===== RELATORIO DE PRODUTOS (1 registros) =====
+
+[0] Nome: Dado
+     Codigo: 3
+     Preco : 10.00
+
